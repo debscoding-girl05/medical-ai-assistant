@@ -1,33 +1,21 @@
-# Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-python-dotenv==1.0.0
-
-# Machine Learning - CPU versions for Render
-tensorflow-cpu==2.15.0
-numpy==1.24.3
-Pillow==10.1.0
-
-# AI Libraries
-google-generativeai==0.3.2
-openai==1.6.1
-
-# Vector Databases and Embeddings
-pinecone-client==2.2.4
-sentence-transformers==2.2.2
-chromadb==0.4.18
-
-# LangChain
-langchain==0.1.0
-langchain-openai==0.0.5
-langchain-pinecone==0.0.3
-
-# Data Processing
-pandas==2.1.4
-matplotlib==3.8.2
-seaborn==0.13.0
-
-# Utilities
-requests==2.31.0
-aiofiles==23.2.1
+agno==1.8.0
+chromadb==1.0.20
+fastapi==0.116.1
+fitz==0.0.1.dev2
+langchain==0.3.27
+langchain_community==0.3.29
+langchain_core==0.3.75
+langchain_huggingface==0.3.1
+langchain_openai==0.3.32
+langchain_pinecone==0.2.12
+matplotlib==3.10.6
+numpy==2.3.2
+pandas==2.3.2
+Pillow==11.3.0
+pinecone_io==0.0.1
+pydantic==2.11.7
+python-dotenv==1.1.1
+scikit_learn==1.7.1
+spacy==3.8.7
+tensorflow==2.19.1
+uvicorn==0.35.0
