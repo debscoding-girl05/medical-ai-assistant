@@ -37,47 +37,8 @@ from multimodal_first_aid import EnhancedFirstAidRAG
 
 from dotenv import load_dotenv
 
-
-import logging
-from pathlib import Path
-
 # Load environment variables
 load_dotenv()
-
-# Configure logging for production
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/app.log') if Path('logs').exists() else logging.StreamHandler()
-    ]
-)
-
-# Add at the beginning of your FastAPI app setup:
-app = FastAPI(
-    title="Unified Medical Analysis API",
-    description="Comprehensive medical analysis system",
-    version="2.0.0",
-    docs_url="/docs" if os.getenv("ENVIRONMENT") != "production" else None,
-    redoc_url="/redoc" if os.getenv("ENVIRONMENT") != "production" else None
-)
-
-# Update CORS for production
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        # Add your production frontend URLs
-        os.getenv("FRONTEND_URL", "")
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -418,15 +379,84 @@ async def root():
         "version": "2.0.0",
         "services": {
             "image_analysis": "CNN-based medical image analysis with AI fallback",
-            "medical_chatbot": "RAG-based medical assistance",
-            "first_aid": "Emergency first aid guidance"
+            "medical_chatbot": "RAG-based medical assistance with diagnosis elaboration",
+            "first_aid": "Emergency first aid guidance with multimodal RAG"
         },
         "endpoints": {
-            "health": "/health",
-            "image_analysis": "/analyze-image",
-            "medical_chat": "/medical-chat", 
-            "first_aid": "/first-aid",
-            "first_aid_search": "/first-aid-search"
+            "health": {
+                "url": "/health",
+                "method": "GET",
+                "description": "Check all services status"
+            },
+            "image_analysis": {
+                "url": "/analyze-image",
+                "method": "POST", 
+                "description": "Analyze medical images (brain MRI or chest X-ray)",
+                "parameters": {
+                    "file": "Image file to analyze",
+                    "analysis_type": "'brain_mri' or 'chest_xray'"
+                }
+            },
+            "combined_analysis": {
+                "url": "/analyze-and-elaborate", 
+                "method": "POST",
+                "description": "🔥 COMPLETE WORKFLOW: Analyze image + Get detailed medical explanation",
+                "parameters": {
+                    "file": "Image file to analyze",
+                    "analysis_type": "'brain_mri' or 'chest_xray'",
+                    "elaboration_question": "Custom question for elaboration (optional)"
+                }
+            },
+            "elaborate_diagnosis": {
+                "url": "/elaborate-diagnosis",
+                "method": "POST", 
+                "description": "Get detailed explanation for a specific diagnosis",
+                "parameters": {
+                    "diagnosis": "The diagnosis to elaborate on",
+                    "analysis_type": "Type of analysis that produced the diagnosis",
+                    "custom_question": "Specific question about the diagnosis (optional)"
+                }
+            },
+            "medical_chat": {
+                "url": "/medical-chat",
+                "method": "POST",
+                "description": "Chat with medical assistant",
+                "parameters": {
+                    "message": "Your medical question",
+                    "context": "Previous diagnosis for context (optional)"
+                }
+            },
+            "first_aid": {
+                "url": "/first-aid",
+                "method": "POST",
+                "description": "Get first aid guidance",
+                "parameters": {
+                    "query": "First aid situation/question",
+                    "max_results": "Number of results to return (default: 3)"
+                }
+            },
+            "first_aid_search": {
+                "url": "/first-aid-search", 
+                "method": "POST",
+                "description": "Search first aid database",
+                "parameters": {
+                    "query": "Search query",
+                    "max_results": "Number of results (default: 3)"
+                }
+            }
+        },
+        "workflows": {
+            "complete_diagnosis": {
+                "description": "Complete medical diagnosis workflow",
+                "steps": [
+                    "1. Use /analyze-and-elaborate for complete analysis + explanation",
+                    "2. Or use /analyze-image then /elaborate-diagnosis for step-by-step approach"
+                ]
+            },
+            "model_selection": {
+                "brain_mri": "Detects: pituitary, glioma, notumor, meningioma",
+                "chest_xray": "Detects: NORMAL, TUBERCULOSIS, PNEUMONIA, COVID19"
+            }
         }
     }
 
