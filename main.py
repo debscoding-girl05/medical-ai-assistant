@@ -121,6 +121,10 @@ medical_agent = None
 rag_chain = None
 first_aid_rag = None
 
+# Records the last initialization error per service so failures are visible via
+# /health and the 503 responses instead of being swallowed into a generic error.
+SERVICE_ERRORS: Dict[str, str] = {}
+
 # =============================================
 # INITIALIZATION FUNCTIONS
 # =============================================
@@ -155,6 +159,7 @@ def initialize_ai_agent():
         GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
         if not GOOGLE_API_KEY:
             logger.warning("Google API Key not found. AI fallback will be disabled.")
+            SERVICE_ERRORS["agent"] = "Missing env var: GOOGLE_API_KEY"
             return
             
         os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
@@ -167,9 +172,11 @@ def initialize_ai_agent():
             markdown=True
         )
         logger.info("Medical AI agent initialized successfully")
-        
+        SERVICE_ERRORS.pop("agent", None)
+
     except Exception as e:
-        logger.error(f"Error initializing AI agent: {e}")
+        logger.error(f"Error initializing AI agent: {e}", exc_info=True)
+        SERVICE_ERRORS["agent"] = f"{type(e).__name__}: {e}"
 
 def initialize_medical_chatbot():
     """Initialize the medical chatbot RAG system"""
@@ -180,7 +187,10 @@ def initialize_medical_chatbot():
         OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
         
         if not PINECONE_API_KEY or not OPENAI_API_KEY:
-            logger.warning("Pinecone or OpenAI API keys missing. Medical chatbot will be disabled.")
+            missing = [k for k, v in (("PINECONE_API_KEY", PINECONE_API_KEY), ("OPENAI_API_KEY", OPENAI_API_KEY)) if not v]
+            msg = f"Missing env var(s): {', '.join(missing)}"
+            logger.warning(f"Medical chatbot disabled. {msg}")
+            SERVICE_ERRORS["chatbot"] = msg
             return
 
         from src.helper import download_hugging_face_embeddings
@@ -211,9 +221,11 @@ def initialize_medical_chatbot():
         rag_chain = create_retrieval_chain(retriever, question_answer_chain)
         
         logger.info("Medical chatbot RAG system initialized successfully")
-        
+        SERVICE_ERRORS.pop("chatbot", None)
+
     except Exception as e:
-        logger.error(f"Error initializing medical chatbot: {e}")
+        logger.error(f"Error initializing medical chatbot: {e}", exc_info=True)
+        SERVICE_ERRORS["chatbot"] = f"{type(e).__name__}: {e}"
 
 def initialize_first_aid_rag():
     """Initialize the first aid RAG system"""
@@ -224,9 +236,11 @@ def initialize_first_aid_rag():
 
         first_aid_rag = EnhancedFirstAidRAG()
         logger.info(f"First Aid RAG initialized with {first_aid_rag.collection.count()} documents")
+        SERVICE_ERRORS.pop("first_aid", None)
 
     except Exception as e:
-        logger.error(f"Error initializing First Aid RAG: {e}")
+        logger.error(f"Error initializing First Aid RAG: {e}", exc_info=True)
+        SERVICE_ERRORS["first_aid"] = f"{type(e).__name__}: {e}"
 
 # Thread-safe, on-demand initialization. Each heavy service loads only on the
 # first request to its endpoint, so the server starts instantly and only the
@@ -578,7 +592,8 @@ async def medical_chat(request: ChatRequest):
     ensure_service("chatbot", initialize_medical_chatbot)
 
     if rag_chain is None:
-        raise HTTPException(status_code=503, detail="Medical chatbot service unavailable")
+        detail = SERVICE_ERRORS.get("chatbot", "Medical chatbot service unavailable")
+        raise HTTPException(status_code=503, detail=f"Medical chatbot unavailable — {detail}")
     
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
