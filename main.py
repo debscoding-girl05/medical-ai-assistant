@@ -1,6 +1,7 @@
 import os
 import shutil
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 import numpy as np
@@ -365,15 +366,26 @@ def get_ai_analysis(image_path: str, analysis_type: str) -> str:
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize all services on startup"""
+    """Kick off service initialization in a background thread.
+
+    Loading the CNN models, embeddings, Pinecone and ChromaDB is slow. uvicorn
+    won't bind the port until the startup event returns, so doing this work here
+    synchronously makes Render report "No open ports detected" until everything
+    finishes (and can fail the deploy). Running it in a daemon thread lets the
+    web server bind its port immediately; endpoints already return a
+    "service not available" response while a given service is still None.
+    """
     logger.info("Starting Unified Medical Analysis API...")
-    
-    load_cnn_models()
-    initialize_ai_agent()
-    initialize_medical_chatbot()
-    initialize_first_aid_rag()
-    
-    logger.info("All services initialization completed")
+
+    def _initialize_services():
+        load_cnn_models()
+        initialize_ai_agent()
+        initialize_medical_chatbot()
+        initialize_first_aid_rag()
+        logger.info("All services initialization completed")
+
+    threading.Thread(target=_initialize_services, daemon=True).start()
+    logger.info("Service initialization started in background; web server is ready")
 
 # =============================================
 # API ENDPOINTS
