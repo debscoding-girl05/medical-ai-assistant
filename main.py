@@ -13,27 +13,11 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# TensorFlow/Keras imports
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.image import load_img, img_to_array
-
-# AI Analysis imports
-from agno.agent import Agent
-from agno.models.google import Gemini
-from agno.media import Image as AgnoImage
-
-# Medical Chatbot imports
-from src.helper import download_hugging_face_embeddings
-from langchain_pinecone import PineconeVectorStore
-from langchain_openai import ChatOpenAI
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from src.prompt import system_prompt
-
-# First Aid RAG import
-from multimodal_first_aid import EnhancedFirstAidRAG
+# NOTE: Heavy ML dependencies (tensorflow/keras, agno, langchain, the multimodal
+# RAG) are imported lazily inside the functions that use them, NOT at module load.
+# Importing them here would make uvicorn block port binding for a long time and
+# load hundreds of MB of RAM up front, which fails startup on small hosts. The
+# per-feature init/analysis functions below import what they need on demand.
 
 from dotenv import load_dotenv
 
@@ -144,8 +128,10 @@ first_aid_rag = None
 def load_cnn_models():
     """Load CNN models for brain MRI and chest X-ray analysis"""
     global brain_mri_model, chest_xray_model
-    
+
     try:
+        from tensorflow.keras.models import load_model
+
         if os.path.exists(cfg.BRAIN_MRI_MODEL_PATH):
             brain_mri_model = load_model(cfg.BRAIN_MRI_MODEL_PATH)
             logger.info("Brain MRI model loaded successfully")
@@ -172,7 +158,10 @@ def initialize_ai_agent():
             return
             
         os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
-        
+
+        from agno.agent import Agent
+        from agno.models.google import Gemini
+
         medical_agent = Agent(
             model=Gemini(id="gemini-2.0-flash-exp"),
             markdown=True
@@ -193,7 +182,15 @@ def initialize_medical_chatbot():
         if not PINECONE_API_KEY or not OPENAI_API_KEY:
             logger.warning("Pinecone or OpenAI API keys missing. Medical chatbot will be disabled.")
             return
-            
+
+        from src.helper import download_hugging_face_embeddings
+        from langchain_pinecone import PineconeVectorStore
+        from langchain_openai import ChatOpenAI
+        from langchain.chains import create_retrieval_chain
+        from langchain.chains.combine_documents import create_stuff_documents_chain
+        from langchain_core.prompts import ChatPromptTemplate
+        from src.prompt import system_prompt
+
         embeddings = download_hugging_face_embeddings()
         index_name = "medical-chatbot"
         
@@ -221,13 +218,32 @@ def initialize_medical_chatbot():
 def initialize_first_aid_rag():
     """Initialize the first aid RAG system"""
     global first_aid_rag
-    
+
     try:
+        from multimodal_first_aid import EnhancedFirstAidRAG
+
         first_aid_rag = EnhancedFirstAidRAG()
         logger.info(f"First Aid RAG initialized with {first_aid_rag.collection.count()} documents")
-        
+
     except Exception as e:
         logger.error(f"Error initializing First Aid RAG: {e}")
+
+# Thread-safe, on-demand initialization. Each heavy service loads only on the
+# first request to its endpoint, so the server starts instantly and only the
+# memory for features actually used is allocated (critical on small hosts).
+_init_locks = {name: threading.Lock() for name in ("cnn", "agent", "chatbot", "first_aid")}
+_init_done = set()
+
+def ensure_service(name, init_fn):
+    """Run init_fn once, the first time it's needed (idempotent + thread-safe)."""
+    if name in _init_done:
+        return
+    with _init_locks[name]:
+        if name in _init_done:
+            return
+        logger.info(f"Lazily initializing service: {name}")
+        init_fn()
+        _init_done.add(name)  # init_fn handles its own errors, so don't retry heavy loads
 
 # =============================================
 # ANALYSIS FUNCTIONS
@@ -239,6 +255,8 @@ def analyze_brain_mri(image_path: str) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Brain MRI model not available")
     
     try:
+        from tensorflow.keras.preprocessing.image import load_img, img_to_array
+
         # Load and preprocess image
         img = load_img(image_path, target_size=(cfg.IMAGE_SIZE, cfg.IMAGE_SIZE))
         img_array = img_to_array(img) / 255.0
@@ -278,6 +296,8 @@ def analyze_chest_xray(image_path: str) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Chest X-ray model not available")
     
     try:
+        from tensorflow.keras.preprocessing.image import load_img
+
         # Load and preprocess image
         image = load_img(image_path, target_size=(cfg.IMAGE_SIZE, cfg.IMAGE_SIZE))
         image = np.array(image)
@@ -324,6 +344,8 @@ def get_ai_analysis(image_path: str, analysis_type: str) -> str:
         resized_image.save(temp_resized)
         
         # Create AgnoImage object
+        from agno.media import Image as AgnoImage
+
         agno_image = AgnoImage(filepath=temp_resized)
         
         # Customize query based on analysis type
@@ -366,26 +388,15 @@ def get_ai_analysis(image_path: str, analysis_type: str) -> str:
 
 @app.on_event("startup")
 async def startup_event():
-    """Kick off service initialization in a background thread.
+    """Start instantly without loading any ML models.
 
-    Loading the CNN models, embeddings, Pinecone and ChromaDB is slow. uvicorn
-    won't bind the port until the startup event returns, so doing this work here
-    synchronously makes Render report "No open ports detected" until everything
-    finishes (and can fail the deploy). Running it in a daemon thread lets the
-    web server bind its port immediately; endpoints already return a
-    "service not available" response while a given service is still None.
+    Heavy services (CNN models, embeddings, Pinecone, ChromaDB) are initialized
+    lazily on the first request to their endpoint via ensure_service(). This lets
+    uvicorn bind its port immediately (so Render sees an open port) and avoids
+    loading TensorFlow + PyTorch + every model at once, which exceeds small RAM
+    limits. Each feature pays its load cost only when it's actually used.
     """
-    logger.info("Starting Unified Medical Analysis API...")
-
-    def _initialize_services():
-        load_cnn_models()
-        initialize_ai_agent()
-        initialize_medical_chatbot()
-        initialize_first_aid_rag()
-        logger.info("All services initialization completed")
-
-    threading.Thread(target=_initialize_services, daemon=True).start()
-    logger.info("Service initialization started in background; web server is ready")
+    logger.info("Unified Medical Analysis API started; services load on first use.")
 
 # =============================================
 # API ENDPOINTS
@@ -512,13 +523,17 @@ async def analyze_medical_image(
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
     
+    # Load the CNN models and AI agent on first use
+    ensure_service("cnn", load_cnn_models)
+    ensure_service("agent", initialize_ai_agent)
+
     temp_path = None
     try:
         # Save uploaded file temporarily
         temp_path = f"temp_{file.filename}"
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
+
         # Try CNN analysis first
         cnn_result = None
         try:
@@ -559,7 +574,9 @@ async def analyze_medical_image(
 @app.post("/medical-chat", response_model=ChatResponse)
 async def medical_chat(request: ChatRequest):
     """Medical chatbot with optional diagnosis elaboration"""
-    
+
+    ensure_service("chatbot", initialize_medical_chatbot)
+
     if rag_chain is None:
         raise HTTPException(status_code=503, detail="Medical chatbot service unavailable")
     
@@ -609,7 +626,9 @@ async def medical_chat(request: ChatRequest):
 @app.post("/first-aid", response_model=FirstAidResponse)
 async def first_aid_query(request: FirstAidRequest):
     """First aid guidance using multimodal RAG"""
-    
+
+    ensure_service("first_aid", initialize_first_aid_rag)
+
     if first_aid_rag is None:
         raise HTTPException(status_code=503, detail="First aid service unavailable")
     
@@ -649,24 +668,26 @@ async def first_aid_query(request: FirstAidRequest):
 @app.post("/first-aid-search")
 async def first_aid_search(request: FirstAidRequest):
     """Search first aid database without generating full response"""
-    
+
+    ensure_service("first_aid", initialize_first_aid_rag)
+
     if first_aid_rag is None:
         raise HTTPException(status_code=503, detail="First aid service unavailable")
     
     try:
         results = first_aid_rag.query_db(request.query, results=request.max_results)
-        
+
         search_results = []
-        for i in range(len(results["uris"][0])):
-            image_path = results["uris"][0][i]
-            image_filename = os.path.basename(image_path)
-            image_url = f"/images/{image_filename}"
-            
+        metadatas = results["metadatas"][0] if results.get("metadatas") else []
+        for i, metadata in enumerate(metadatas):
+            image_path = metadata.get("image_path")
+            image_url = f"/images/{os.path.basename(image_path)}" if image_path else None
+
             search_results.append({
                 "image_url": image_url,
                 "distance": results["distances"][0][i],
-                "metadata": results["metadatas"][0][i],
-                "text_content": results["metadatas"][0][i].get("text_content", "No text available")
+                "metadata": metadata,
+                "text_content": metadata.get("text_content", "No text available")
             })
         
         return {
