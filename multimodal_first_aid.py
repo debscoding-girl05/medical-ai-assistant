@@ -5,8 +5,7 @@ from PIL import Image
 import warnings
 from dotenv import load_dotenv
 import chromadb
-from chromadb.utils.embedding_functions import OpenCLIPEmbeddingFunction
-from chromadb.utils.data_loaders import ImageLoader
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -41,14 +40,17 @@ class EnhancedFirstAidRAG:
         
         os.makedirs(self.images_folder, exist_ok=True)
         
-        # Initialize ChromaDB components
+        # Initialize ChromaDB components.
+        # Use OpenAI text embeddings (lightweight, API-based) instead of OpenCLIP,
+        # which would require PyTorch (~1GB) and exceed small/free hosting tiers.
         self.chroma_client = chromadb.PersistentClient(path=self.db_path)
-        self.image_loader = ImageLoader()
-        self.embedding_function = OpenCLIPEmbeddingFunction()
+        self.embedding_function = OpenAIEmbeddingFunction(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model_name="text-embedding-3-small",
+        )
         self.collection = self.chroma_client.get_or_create_collection(
             "first_aid_collection",
             embedding_function=self.embedding_function,
-            data_loader=self.image_loader,
         )
         
         # Initialize LangChain components
@@ -250,7 +252,6 @@ class EnhancedFirstAidRAG:
             self.collection = self.chroma_client.create_collection(
                 "first_aid_collection",
                 embedding_function=self.embedding_function,
-                data_loader=self.image_loader,
             )
         except Exception:
             pass
@@ -258,24 +259,25 @@ class EnhancedFirstAidRAG:
         print(f"Adding {len(extracted_info)} items to the database...")
 
         ids = [item["id"] for item in extracted_info]
-        uris = [item["uris"][0] for item in extracted_info]  # Extract the first URI from each list
+        image_paths = [item["uris"][0] for item in extracted_info]  # associated image for each item
         documents = [item["text"] for item in extracted_info]
         metadatas = []
-        
-        # Add text content to metadata so it's preserved with the image
+
+        # Embed the text; keep the text and its associated image path in metadata
         for i, item in enumerate(extracted_info):
             metadata = item["metadata"].copy()
             metadata["text_content"] = documents[i]  # Store text in metadata
+            metadata["image_path"] = image_paths[i]  # Store associated image path
             metadatas.append(metadata)
 
-        # Add only images with metadata containing the text
+        # Add text documents (embedded via OpenAI) with image paths preserved in metadata
         batch_size = 50
         for i in range(0, len(ids), batch_size):
             batch_end = min(i + batch_size, len(ids))
-            
+
             self.collection.add(
                 ids=ids[i:batch_end],
-                uris=uris[i:batch_end],
+                documents=documents[i:batch_end],
                 metadatas=metadatas[i:batch_end]
             )
         
@@ -289,30 +291,34 @@ class EnhancedFirstAidRAG:
         results = self.collection.query(
             query_texts=[query],
             n_results=results,
-            include=["uris", "distances", "documents", "metadatas"]
+            include=["distances", "documents", "metadatas"]
         )
         return results
 
     def generate_response(self, user_query):
         results = self.query_db(user_query, results=1)
-        
-        if not results["uris"][0]:
+
+        if not results["documents"] or not results["documents"][0]:
             return {"success": False, "message": "No relevant information found."}
-        
-        best_image_path = results["uris"][0][0]
-        best_document = results["metadatas"][0][0].get("text_content", "No text available")
-    
-        with open(best_image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode("utf-8")
-        
+
+        best_metadata = results["metadatas"][0][0]
+        best_image_path = best_metadata.get("image_path")
+        best_document = best_metadata.get("text_content", "No text available")
+
         prompt_input = {
             "user_query": user_query,
             "document_text": best_document,
-            "image_data": image_data
         }
-        
+
+        # Include the associated image only if it still exists on disk
+        if best_image_path and os.path.exists(best_image_path):
+            with open(best_image_path, "rb") as image_file:
+                prompt_input["image_data"] = base64.b64encode(image_file.read()).decode("utf-8")
+        else:
+            prompt_input["image_data"] = ""
+
         response = self.vision_chain.invoke(prompt_input)
-        
+
         return {
             "success": True,
             "response": response,
