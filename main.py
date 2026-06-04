@@ -20,7 +20,6 @@ from tensorflow.keras.preprocessing.image import load_img, img_to_array
 # AI Analysis imports
 from agno.agent import Agent
 from agno.models.google import Gemini
-from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.media import Image as AgnoImage
 
 # Medical Chatbot imports
@@ -52,14 +51,17 @@ app = FastAPI(
 )
 
 # CORS middleware
+# Explicit origins for local dev + the configured frontend URL, plus a regex
+# that matches every Vercel deployment of this project (preview URLs change
+# on each deploy, so a static list would break after every Vercel redeploy).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://v0-aidmatewebsite-ioqpsysij-takouessa-ngaffo-deboras-projects.vercel.app",
         os.getenv("FRONTEND_URL", ""),
     ],
+    allow_origin_regex=r"https://v0-aidmatewebsite.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -172,7 +174,6 @@ def initialize_ai_agent():
         
         medical_agent = Agent(
             model=Gemini(id="gemini-2.0-flash-exp"),
-            tools=[DuckDuckGoTools()],
             markdown=True
         )
         logger.info("Medical AI agent initialized successfully")

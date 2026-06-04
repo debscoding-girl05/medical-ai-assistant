@@ -16,6 +16,5 @@ langchain_pinecone==0.2.12
 chromadb==1.0.20
 agno==1.8.0
 google-genai
-duckduckgo-search
 Pillow==11.3.0
 PyMuPDF>=1.23.0
