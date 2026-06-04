@@ -120,9 +120,10 @@ class Config:
     BRAIN_MRI_LABELS = ['pituitary', 'glioma', 'notumor', 'meningioma']
     CHEST_XRAY_LABELS = ['NORMAL', 'TUBERCULOSIS', 'PNEUMONIA', 'COVID19']
     
-    # Model paths
-    BRAIN_MRI_MODEL_PATH = '/models/brain_mri_model.h5'
-    CHEST_XRAY_MODEL_PATH = '/models/chestXray_model.keras'
+    # Model paths (relative to this file so they resolve on any host)
+    _BASE_DIR = Path(__file__).parent
+    BRAIN_MRI_MODEL_PATH = str(_BASE_DIR / "models" / "brain_mri_model.h5")
+    CHEST_XRAY_MODEL_PATH = str(_BASE_DIR / "models" / "chestXray_model.keras")
 
 cfg = Config()
 
