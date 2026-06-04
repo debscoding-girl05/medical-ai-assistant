@@ -18,4 +18,4 @@ chromadb==1.0.20
 pinecone_io==0.0.1
 agno==1.8.0
 Pillow==11.3.0
-fitz==0.0.1.dev2
+PyMuPDF>=1.23.0

@@ -3,5 +3,17 @@ services:
     name: medical-ai-assistant
     env: python
     plan: free
+    pythonVersion: "3.11.9"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn src.main:app --host 0.0.0.0 --port 8000"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: FRONTEND_URL
+        value: https://v0-aidmatewebsite-ioqpsysij-takouessa-ngaffo-deboras-projects.vercel.app
+      - key: ENVIRONMENT
+        value: production
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
